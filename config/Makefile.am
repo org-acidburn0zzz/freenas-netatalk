@@ -43,8 +43,8 @@ install-data-local: install-config-files
 
 uninstall-local:
 	@for f in $(CONFFILES) $(GENFILES); do \
-		echo rm -f $(DESTDIR)$(pkgconfdir)/$$f; \
-		rm -f $(DESTDIR)$(pkgconfdir)/$$f; \
+		echo rm -f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
+		rm -f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
 	done
 	rm -f $(DESTDIR)$(pkgconfdir)/dbus-session.conf
 	rm -f $(DESTDIR)$(localstatedir)/netatalk/README
@@ -56,18 +56,13 @@ endif
 install-config-files: $(CONFFILES) $(GENFILES)
 	$(mkinstalldirs) $(DESTDIR)$(pkgconfdir)
 	@for f in $(CONFFILES) ; do \
-		if test "x$(OVERWRITE_CONFIG)" = "xyes" -o ! -f $(DESTDIR)$(pkgconfdir)/$$f; then \
-			echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)"; \
-			$(INSTALL_DATA) $(srcdir)/$$f $(DESTDIR)$(pkgconfdir); \
-		else \
-			echo "not overwriting $$f"; \
-		fi; \
+		echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist"; \
+		$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
 	done
 	@for f in $(GENFILES); do \
-		if test "x$(OVERWRITE_CONFIG)" = "xyes" -o ! -f $(DESTDIR)$(pkgconfdir)/$$f; then \
-			echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)"; \
-			$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir); \
-		else \
-			echo "not overwriting $$f"; \
+		if [ $$f != "dbus-session.conf" ]; then \
+			echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist"; \
+			$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
 		fi; \
 	done
+	$(INSTALL_DATA) dbus-session.conf $(DESTDIR)$(pkgconfdir)/dbus-session.conf.netatalk
