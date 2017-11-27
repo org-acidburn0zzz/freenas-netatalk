@@ -369,6 +369,12 @@ static void register_stuff(const AFPObj *obj) {
     }
 
     // Allocate the memory to store our service refs
+    
+    /*
+     *	XXX: This looks like a bug to me. svc_ref_count = 0 here, which only allocates a single DNSServiceRef,
+     *	which clearly isn't what get used here. This most likely works because the memory chunk is big enough
+     *	to hold more DNSServiceRefs. Keeping in place for now until further review.
+     */
     svc_refs = calloc(svc_ref_count, sizeof(DNSServiceRef));
     assert(svc_refs);
     svc_ref_count = 0;
