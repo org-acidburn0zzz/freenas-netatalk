@@ -11,6 +11,12 @@
 
 #ifdef HAVE_MDNS
 
+#include <sys/types.h>
+#include <sys/queue.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <unistd.h>
 #include <time.h>
 #include <pthread.h>
@@ -20,9 +26,20 @@
 #include <atalk/util.h>
 #include <atalk/unicode.h>
 #include <atalk/netatalk_conf.h>
+#include <atalk/errchk.h>
+#include <atalk/globals.h>
+#include <atalk/dsi.h>
 
 #include "afp_zeroconf.h"
 #include "afp_mdns.h"
+
+struct interface {
+    unsigned int index;
+    char *name;
+    TAILQ_ENTRY(interface) link;
+};
+
+TAILQ_HEAD(ifa_queue, interface);
 
 /*
  * We'll store all the DNSServiceRef's here so that we can
@@ -152,6 +169,150 @@ static void unregister_stuff() {
     }
 }
 
+int
+get_mdns_interfaces(struct ifa_queue *queue, const AFPObj *obj)
+{
+    EC_INIT;
+    struct ifaddrs *ifaddr = NULL, *ifa;
+    int family, found;
+    char *p = NULL, *q = NULL, *savep;
+    const char *ip;
+
+    if (getifaddrs(&ifaddr) != 0) {
+        LOG(log_error, logtype_afpd, "getinterfaddr: getifaddrs() failed: %s", strerror(errno));
+        EC_FAIL;
+    }
+
+    if (obj->options.listen) {
+        EC_NULL( q = p = strdup(obj->options.listen) );
+        EC_NULL( p = strtok_r(p, ", ", &savep) );
+        while (p) {
+            struct interface *iface = NULL, *tmp = NULL;
+            unsigned int index = 0;
+
+            for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL)
+                    continue;
+
+                family = ifa->ifa_addr->sa_family;
+                if (family != AF_INET && family != AF_INET6)
+                    continue;
+
+                ip = getip_string(ifa->ifa_addr);
+                if (STRCMP(ip, !=, p))
+                    continue;
+
+                index = if_nametoindex(ifa->ifa_name);
+		break;
+	    }
+
+            if (index <= 0)
+                continue; 
+            if (TAILQ_EMPTY(queue)) {
+                EC_NULL(iface = malloc(sizeof(*iface)));
+                EC_NULL(iface->name = malloc(IFNAMSIZ));
+                strlcpy(iface->name, ifa->ifa_name, IFNAMSIZ); 
+                iface->index = index;
+
+                TAILQ_INSERT_HEAD(queue, iface, link);
+
+            } else {
+                struct interface *tmp2 = NULL;
+
+                TAILQ_FOREACH(tmp, queue, link) {
+                    tmp2 = tmp; 
+                    if (tmp->index < index) {
+                        continue;
+                    }
+                }
+
+                if (index != tmp2->index) {
+                    EC_NULL(iface = malloc(sizeof(*iface)));
+                    EC_NULL(iface->name = malloc(IFNAMSIZ));
+                    strlcpy(iface->name, ifa->ifa_name, IFNAMSIZ); 
+                    iface->index = index;
+
+		    if (index > tmp2->index) {
+                        TAILQ_INSERT_AFTER(queue, tmp2, iface, link);
+                    } else {
+                        TAILQ_INSERT_BEFORE(tmp2, iface, link);
+                    }
+                }
+            }
+            p = strtok_r(NULL, ", ", &savep);
+        }
+        if (q) {
+            free(q);
+            q = NULL;
+        }
+    }
+
+    if (obj->options.interfaces) {
+        EC_NULL( q = p = strdup(obj->options.interfaces) );
+        EC_NULL( p = strtok_r(p, ", ", &savep) );
+        while (p) {
+            struct interface *iface = NULL, *tmp = NULL;
+            unsigned int index = 0;
+
+            for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                if (ifa->ifa_addr == NULL)
+                    continue;
+                if (STRCMP(ifa->ifa_name, !=, p))
+                    continue;
+
+                family = ifa->ifa_addr->sa_family;
+                if (family != AF_INET && family != AF_INET6)
+                    continue;
+
+                index = if_nametoindex(ifa->ifa_name);
+		break;
+            }
+
+            if (index <= 0)
+                continue; 
+            if (TAILQ_EMPTY(queue)) {
+                EC_NULL(iface = malloc(sizeof(*iface)));
+                EC_NULL(iface->name = malloc(IFNAMSIZ));
+                strlcpy(iface->name, ifa->ifa_name, IFNAMSIZ); 
+                iface->index = index;
+
+                TAILQ_INSERT_HEAD(queue, iface, link);
+
+            } else {
+                struct interface *tmp2 = NULL;
+
+                TAILQ_FOREACH(tmp, queue, link) {
+                    tmp2 = tmp; 
+                    if (tmp->index < index) {
+                        continue;
+                    }
+                }
+
+                if (index != tmp2->index) {
+                    EC_NULL(iface = malloc(sizeof(*iface)));
+                    EC_NULL(iface->name = malloc(IFNAMSIZ));
+                    strlcpy(iface->name, ifa->ifa_name, IFNAMSIZ); 
+                    iface->index = index;
+
+		    if (index > tmp2->index) {
+                        TAILQ_INSERT_AFTER(queue, tmp2, iface, link);
+                    } else {
+                        TAILQ_INSERT_BEFORE(tmp2, iface, link);
+                    }
+                }
+            }
+            p = strtok_r(NULL, ", ", &savep);
+        }
+    }
+
+EC_CLEANUP:
+    if (q)
+        free(q);
+    if (ifaddr)
+        freeifaddrs(ifaddr);
+    EC_EXIT;
+}
+
 /*
  * This function tries to register the AFP DNS
  * SRV service type.
@@ -164,6 +325,8 @@ static void register_stuff(const AFPObj *obj) {
     TXTRecordRef                        txt_adisk;
     TXTRecordRef                        txt_devinfo;
     char                                        tmpname[256];
+    struct ifa_queue queue;
+    struct interface *tmp = NULL, *tmp2 = NULL;
 
     // If we had already registered, then we will unregister and re-register
     if(svc_refs) unregister_stuff();
@@ -234,82 +397,108 @@ static void register_stuff(const AFPObj *obj) {
         }
     }
 
-    error = DNSServiceRegister(&svc_refs[svc_ref_count++],
-                               0,               // no flags
-                               0,               // all network interfaces
-                               name,
-                               AFP_DNS_SERVICE_TYPE,
-                               "",            // default domains
-                               NULL,            // default host name
-                               htons(port),
-                               0,               // length of TXT
-                               NULL,            // no TXT
-                               RegisterReply,           // callback
-                               NULL);       // no context
-    if (error != kDNSServiceErr_NoError) {
-        LOG(log_error, logtype_afpd, "Failed to add service: %s, error=%d",
-            AFP_DNS_SERVICE_TYPE, error);
-            svc_ref_count--;
-        goto fail;
+    TAILQ_INIT(&queue);     
+    if (obj->options.interfaces == NULL && obj->options.listen == NULL) {
+        struct interface *iface = NULL;
+
+        if ((iface = malloc(sizeof(*iface))) == NULL) {
+            LOG(log_error, logtype_afpd, "malloc() failed: %s", strerror(errno));
+            goto fail;	     
+        }
+
+        iface->name = NULL;
+        iface->index = 0;
+
+        TAILQ_INSERT_HEAD(&queue, iface, link);
+
+    } else {
+        get_mdns_interfaces(&queue, obj);
     }
 
-    if (i) {
+    TAILQ_FOREACH_SAFE(tmp, &queue, link, tmp2) {
+        /* XXX: Should we set the service name to be name + instance ? */
         error = DNSServiceRegister(&svc_refs[svc_ref_count++],
-                                   0,               // no flags
-                                   0,               // all network interfaces
-                                   name,
-                                   ADISK_SERVICE_TYPE,
-                                   "",            // default domains
-                                   NULL,            // default host name
-                                   htons(port),
-                                   TXTRecordGetLength(&txt_adisk),
-                                   TXTRecordGetBytesPtr(&txt_adisk),
-                                   RegisterReply,           // callback
-                                   NULL);       // no context
+            0,               // no flags
+            tmp->index,      // interface index
+            name,
+            AFP_DNS_SERVICE_TYPE,
+            "",              // default domains
+            NULL,            // default host name
+            htons(port),
+            0,               // length of TXT
+            NULL,            // no TXT
+            RegisterReply,   // callback
+            NULL);           // no context
         if (error != kDNSServiceErr_NoError) {
             LOG(log_error, logtype_afpd, "Failed to add service: %s, error=%d",
-                ADISK_SERVICE_TYPE, error);
-            svc_ref_count--;
-            goto fail;
-        }
-    }
-
-    if (obj->options.mimicmodel) {
-        LOG(log_info, logtype_afpd, "Registering server as model '%s'",
-            obj->options.mimicmodel);
-        TXTRecordCreate(&txt_devinfo, 0, NULL);
-        if ( 0 > TXTRecordPrintf(&txt_devinfo, "model", obj->options.mimicmodel) ) {
-            LOG ( log_error, logtype_afpd, "Could not create Zeroconf TXTRecord for model");
+                AFP_DNS_SERVICE_TYPE, error);
+                svc_ref_count--;
             goto fail;
         }
 
-        error = DNSServiceRegister(&svc_refs[svc_ref_count++],
-                                   0,               // no flags
-                                   0,               // all network interfaces
-                                   name,
-                                   DEV_INFO_SERVICE_TYPE,
-                                   "",            // default domains
-                                   NULL,            // default host name
-                                   /*
-                                    * We would probably use port 0 zero, but we can't, from man DNSServiceRegister:
-                                    *   "A value of 0 for a port is passed to register placeholder services.
-                                    *    Place holder services are not found  when browsing, but other
-                                    *    clients cannot register with the same name as the placeholder service."
-                                    * We therefor use port 9 which is used by the adisk service type.
-                                    */
-                                   htons(9),
-                                   TXTRecordGetLength(&txt_devinfo),
-                                   TXTRecordGetBytesPtr(&txt_devinfo),
-                                   RegisterReply,           // callback
-                                   NULL);       // no context
-        TXTRecordDeallocate(&txt_devinfo);
-        if (error != kDNSServiceErr_NoError) {
-            LOG(log_error, logtype_afpd, "Failed to add service: %s, error=%d",
-                DEV_INFO_SERVICE_TYPE, error);
-            svc_ref_count--;
-            goto fail;
+        if (i) {
+            error = DNSServiceRegister(&svc_refs[svc_ref_count++],
+                0,               // no flags
+                tmp->index,      // interface index
+                name,
+                ADISK_SERVICE_TYPE,
+                "",              // default domains
+                NULL,            // default host name
+                htons(port),
+                TXTRecordGetLength(&txt_adisk),
+                TXTRecordGetBytesPtr(&txt_adisk),
+                RegisterReply,   // callback
+                NULL);           // no context
+            if (error != kDNSServiceErr_NoError) {
+                LOG(log_error, logtype_afpd, "Failed to add service: %s, error=%d",
+                    ADISK_SERVICE_TYPE, error);
+                svc_ref_count--;
+                goto fail;
+            }
         }
-    } /* if (config->obj.options.mimicmodel) */
+
+        if (obj->options.mimicmodel) {
+            LOG(log_info, logtype_afpd, "Registering server as model '%s'",
+                obj->options.mimicmodel);
+            TXTRecordCreate(&txt_devinfo, 0, NULL);
+            if ( 0 > TXTRecordPrintf(&txt_devinfo, "model", obj->options.mimicmodel) ) {
+                LOG ( log_error, logtype_afpd, "Could not create Zeroconf TXTRecord for model");
+                goto fail;
+            }
+
+            error = DNSServiceRegister(&svc_refs[svc_ref_count++],
+                0,               // no flags
+                tmp->index,      // interface index
+                name,
+                DEV_INFO_SERVICE_TYPE,
+                "",              // default domains
+                NULL,            // default host name
+                /*
+                 * We would probably use port 0 zero, but we can't, from man DNSServiceRegister:
+                 *   "A value of 0 for a port is passed to register placeholder services.
+                 *    Place holder services are not found  when browsing, but other
+                 *    clients cannot register with the same name as the placeholder service."
+                 * We therefor use port 9 which is used by the adisk service type.
+                 */
+                htons(9),
+                TXTRecordGetLength(&txt_devinfo),
+                TXTRecordGetBytesPtr(&txt_devinfo),
+                RegisterReply,  // callback
+                NULL);          // no context
+            TXTRecordDeallocate(&txt_devinfo);
+            if (error != kDNSServiceErr_NoError) {
+                LOG(log_error, logtype_afpd, "Failed to add service: %s, error=%d",
+                    DEV_INFO_SERVICE_TYPE, error);
+                svc_ref_count--;
+                goto fail;
+            }
+        } /* if (config->obj.options.mimicmodel) */
+
+        TAILQ_REMOVE(&queue, tmp, link);
+        free(tmp->name);
+        free(tmp);
+
+    } /* TAILQ_FOREACH(tmp, &queue, link) */
 
     /*
      * Now we can create the thread that will poll for the results

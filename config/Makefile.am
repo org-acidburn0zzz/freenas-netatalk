@@ -43,8 +43,8 @@ install-data-local: install-config-files
 
 uninstall-local:
 	@for f in $(CONFFILES) $(GENFILES); do \
-		echo rm -f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
-		rm -f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
+		echo rm -f $(DESTDIR)$(pkgconfdir)/$$f.sample; \
+		rm -f $(DESTDIR)$(pkgconfdir)/$$f.sample; \
 	done
 	rm -f $(DESTDIR)$(pkgconfdir)/dbus-session.conf
 	rm -f $(DESTDIR)$(localstatedir)/netatalk/README
@@ -56,13 +56,13 @@ endif
 install-config-files: $(CONFFILES) $(GENFILES)
 	$(mkinstalldirs) $(DESTDIR)$(pkgconfdir)
 	@for f in $(CONFFILES) ; do \
-		echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist"; \
-		$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
+		echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.sample"; \
+		$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.sample; \
 	done
 	@for f in $(GENFILES); do \
 		if [ $$f != "dbus-session.conf" ]; then \
-			echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist"; \
-			$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.dist; \
+			echo "$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.sample"; \
+			$(INSTALL_DATA) $$f $(DESTDIR)$(pkgconfdir)/$$f.sample; \
 		fi; \
 	done
 	$(INSTALL_DATA) dbus-session.conf $(DESTDIR)$(pkgconfdir)/dbus-session.conf.netatalk

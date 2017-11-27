@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <atalk/logger.h>
+#include <arpa/inet.h>
 
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
