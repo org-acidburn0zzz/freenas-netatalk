@@ -1,9 +1,10 @@
-#!/usr/local/bin/python2.7
+#!/usr/local/bin/python
 
 usage = """Usage:
 python afpstats.py
 """
 
+from __future__ import print_function
 import sys
 from traceback import print_exc
 import dbus
@@ -23,7 +24,7 @@ def main():
 
     reply = iface.GetUsers()
     for name in reply:
-        print name
+        print(name)
 
 if __name__ == '__main__':
     main()
